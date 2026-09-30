@@ -10,7 +10,6 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 
 # مكتبات ReportLab لتوليد ملفات الـ PDF
-from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -84,14 +83,20 @@ st.markdown("""
         color: white;
         border-radius: 8px;
         font-weight: bold;
-        padding: 12px;
+        padding: 10px;
         border: none;
-        font-size: 16px;
+        font-size: 15px;
         transition: background-color 0.3s;
     }
 
     .stDownloadButton > button:hover, .stButton > button:hover {
         background-color: #2a5298;
+    }
+
+    /* محاذاة أزرار الدخول القليلة */
+    div[data-testid="stColumn"] {
+        display: flex;
+        align-items: flex-end;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -120,12 +125,32 @@ def fix_arabic(text):
 
 
 # ----------------------------------------------------
-# 5. دالة إنشاء ملف الـ PDF
+# 5. دالة إنشاء ملف الـ PDF بطول ديناميكي ينتهي عند التوقيع
 # ----------------------------------------------------
 def create_pdf(teacher_name, session_info):
     buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
+
+    # فلترة البيانات المستبعدة
+    ignored_keys = ['اسم الأستاذ', 'الرقم', 'رقم', 'الرقم التسلسلي', 'id', 'ID', 'no', 'No', 'الرقم السري']
+    items = [
+        (key, val) for key, val in session_info.items()
+        if key not in ignored_keys and not any(k in str(key) for k in ['الرقم', 'رقم'])
+    ]
+
+    # حساب طول الصفحة الديناميكي (العرض ثابث والطول يتكيف مع عدد الأسطر)
+    width = 420  # عرض متناسب
+    
+    # حساب المسافات الإضافية بناءً على عدد الحقول المعروضة
+    header_height = 140
+    title_height = 35
+    teacher_line_height = 20
+    fields_height = len(items) * 18
+    footer_height = 80  # للتاريخ والتوقيع والمسافة الأخيرة
+    
+    # الارتفاع النهائي المطلوب للورقة بالضبط
+    height = header_height + title_height + teacher_line_height + fields_height + footer_height
+
+    c = canvas.Canvas(buffer, pagesize=(width, height))
 
     # تسجيل الخط العربي
     if os.path.exists(FONT_PATH):
@@ -135,46 +160,41 @@ def create_pdf(teacher_name, session_info):
         font_name = 'Helvetica'
 
     # --- الترويسة العليا ---
-    c.setFont(font_name, 11)
-    c.drawCentredString(width / 2, height - 40, fix_arabic("الجمهورية الجزائرية الديمقراطية الشعبية"))
-    c.drawCentredString(width / 2, height - 58, fix_arabic("وزارة التعليم العالي والبحث العلمي"))
-    c.drawCentredString(width / 2, height - 76, fix_arabic("جامعة الوادي"))
+    c.setFont(font_name, 9)
+    c.drawCentredString(width / 2, height - 25, fix_arabic("الجمهورية الجزائرية الديمقراطية الشعبية"))
+    c.drawCentredString(width / 2, height - 39, fix_arabic("وزارة التعليم العالي والبحث العلمي"))
+    c.drawCentredString(width / 2, height - 53, fix_arabic("جامعة الوادي"))
 
-    c.drawRightString(width - 45, height - 96, fix_arabic("كلية الآداب واللغات"))
-    c.drawString(45, height - 96, fix_arabic("السنة الجامعية: 2026-2027"))
-    c.drawRightString(width - 45, height - 111, fix_arabic("قسم اللغة والأدب العربي"))
+    c.drawRightString(width - 25, height - 69, fix_arabic("كلية الآداب واللغات"))
+    c.drawString(25, height - 69, fix_arabic("السنة الجامعية: 2026-2027"))
+    c.drawRightString(width - 25, height - 81, fix_arabic("قسم اللغة والأدب العربي"))
 
     # --- عنوان التقرير ---
-    title_y = height - 160
-    c.setFont(font_name, 18)
+    title_y = height - 110
+    c.setFont(font_name, 13)
     c.drawCentredString(width / 2, title_y, fix_arabic("تقرير غياب جماعي للطلبة"))
 
     # --- نص التقرير والمعلومات ---
-    c.setFont(font_name, 11)
-    y_pos = title_y - 45
+    c.setFont(font_name, 9.5)
+    y_pos = title_y - 25
     
-    c.drawRightString(width - 45, y_pos, fix_arabic("لقد سجلنا غياباً جماعياً للطلبة وفقاً للمعلومات الآتية:"))
+    c.drawRightString(width - 25, y_pos, fix_arabic("لقد سجلنا غياباً جماعياً للطلبة وفقاً للمعلومات الآتية:"))
     
-    y_pos -= 22
-    c.drawRightString(width - 45, y_pos, fix_arabic(f"• أستاذ المادة: {teacher_name}"))
+    y_pos -= 18
+    c.drawRightString(width - 25, y_pos, fix_arabic(f"• أستاذ المادة: {teacher_name}"))
 
-    # استبعاد الأرقام المعرفة وأسماء الأساتذة من التقرير
-    ignored_keys = ['اسم الأستاذ', 'الرقم', 'رقم', 'الرقم التسلسلي', 'id', 'ID', 'no', 'No', 'الرقم السري']
-    
-    for key, val in session_info.items():
-        if key not in ignored_keys and not any(k in str(key) for k in ['الرقم', 'رقم']):
-            y_pos -= 22
-            c.drawRightString(width - 45, y_pos, fix_arabic(f"• {key}: {val}"))
+    for key, val in items:
+        y_pos -= 18
+        c.drawRightString(width - 25, y_pos, fix_arabic(f"• {key}: {val}"))
 
-    # ترك مسافة فارغة
-    y_pos -= 80
+    # --- التاريخ والتوقيع والانتهاء بعدها بسطرين ---
+    y_pos -= 30
 
-    # التاريخ والتوقيع في أقصى اليسار
     today_date = datetime.now().strftime("%Y-%m-%d")
-    c.drawString(45, y_pos, fix_arabic(f"حرر بتاريخ: {today_date}"))
+    c.drawString(25, y_pos, fix_arabic(f"حرر بتاريخ: {today_date}"))
 
-    y_pos -= 25
-    c.drawString(45, y_pos, fix_arabic("توقيع الأستاذ(ة):"))
+    y_pos -= 20
+    c.drawString(25, y_pos, fix_arabic("توقيع الأستاذ(ة):"))
 
     c.showPage()
     c.save()
@@ -183,7 +203,7 @@ def create_pdf(teacher_name, session_info):
 
 
 # ----------------------------------------------------
-# 6. شاشة كلمة المرور الرئيسية (ADMIN)
+# 6. شاشة كلمة المرور الرئيسية (التأكد من هوية المستخدم)
 # ----------------------------------------------------
 if 'admin_authenticated' not in st.session_state:
     st.session_state.admin_authenticated = False
@@ -195,15 +215,20 @@ if not st.session_state.admin_authenticated:
         </div>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        master_password = st.text_input("أدخل كلمة السر العامة للدخول:", type="password", key="admin_pass")
-        if st.button("دخول البرنامج"):
+    col_center1, col_center2, col_center3 = st.columns([1, 2, 1])
+    with col_center2:
+        c_input, c_btn = st.columns([3, 1])
+        with c_input:
+            master_password = st.text_input("أدخل كلمة السر العامة للدخول:", type="password", key="admin_pass")
+        with c_btn:
+            login_clicked = st.button("🔑 دخول", key="btn_admin_login")
+
+        if login_clicked or master_password:
             if master_password == "ADMIN":
                 st.session_state.admin_authenticated = True
                 st.rerun()
-            else:
-                st.error("كلمة المرور العامة غير صحيحة!")
+            elif master_password != "":
+                st.error("كلمة المرور غير صحيحة!")
     st.stop()
 
 
@@ -212,7 +237,7 @@ if not st.session_state.admin_authenticated:
 # ----------------------------------------------------
 st.markdown("""
     <div class="main-header">
-        <h2>برنامج إدارة غيابات الطلبة</h2>
+        <h2>برنامج إدارة غيابات الطلبة_خليل</h2>
     </div>
 """, unsafe_allow_html=True)
 
@@ -234,15 +259,17 @@ session_teacher_col = [c for c in df_sessions.columns if 'أستاذ' in c or '�
 session_teacher_key = session_teacher_col[0] if session_teacher_col else df_sessions.columns[0]
 
 # تسجيل دخول الأستاذ
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns([2, 2, 1])
 teachers_list = df_teachers[teacher_col].dropna().astype(str).str.strip().unique().tolist()
 
 with c1:
     selected_teacher = st.selectbox("اسم الأستاذ:", ["-- اختر الاسم --"] + teachers_list)
 with c2:
     password_input = st.text_input("الرقم السري للأستاذ:", type="password")
+with c3:
+    teacher_login_btn = st.button("🔑 دخول", key="btn_teacher_login")
 
-if selected_teacher != "-- اختر الاسم --" and password_input:
+if selected_teacher != "-- اختر الاسم --" and (password_input or teacher_login_btn):
     teacher_row = df_teachers[df_teachers[teacher_col].astype(str).str.strip() == selected_teacher]
     real_password = str(teacher_row.iloc[0][pass_col]).strip()
 
@@ -320,7 +347,7 @@ if selected_teacher != "-- اختر الاسم --" and password_input:
             st.markdown("<br>", unsafe_allow_html=True)
             pdf_data = create_pdf(selected_teacher, custom_data)
             st.download_button(
-                label="🖨️️ طباعة تقرير الحصة الجديدة (PDF)",
+                label="🖨 طباعة تقرير الحصة الجديدة (PDF)",
                 data=pdf_data,
                 file_name=f"تقرير_غياب_{selected_teacher}.pdf",
                 mime="application/pdf"
