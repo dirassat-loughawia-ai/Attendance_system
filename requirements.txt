@@ -4,3 +4,5 @@ openpyxl
 reportlab
 arabic-reshaper
 python-bidi
+st-gsheets-connection
+gspread
