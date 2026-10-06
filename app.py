@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 # مكتبات معالجة وتشكيل النص العربي للـ PDF
 import arabic_reshaper
@@ -26,81 +27,90 @@ if not os.path.exists(FONT_PATH):
         pass
 
 # ----------------------------------------------------
-# 2. إدارة عداد الزوار وقواعد البيانات
+# 2. إنشاء الاتصال الدائم بـ Google Sheets
 # ----------------------------------------------------
-VISITOR_FILE = "visitor_count.txt"
+conn = st.connection("gsheets", type=GSheetsConnection)
 
+def load_data_from_sheet(worksheet_name, expected_cols):
+    try:
+        df = conn.read(worksheet=worksheet_name, ttl="0s")
+        if df is None or df.empty:
+            return pd.DataFrame(columns=expected_cols)
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = ""
+        return df[expected_cols]
+    except Exception:
+        return pd.DataFrame(columns=expected_cols)
+
+def save_data_to_sheet(worksheet_name, df):
+    try:
+        conn.update(worksheet=worksheet_name, data=df)
+        return True
+    except Exception as e:
+        st.error(f"خطأ أثناء حفظ البيانات: {e}")
+        return False
+
+# --- تحميل كلمة المرور وتحديثها في جوجل شيت ---
+def get_dept_password():
+    df_sett = load_data_from_sheet("الإعدادات", ["المفتاح", "القيمة"])
+    if not df_sett.empty:
+        pass_row = df_sett[df_sett["المفتاح"] == "dept_password"]
+        if not pass_row.empty:
+            return str(pass_row.iloc[0]["القيمة"]).strip()
+    return "1234"
+
+def save_dept_password(new_pass):
+    df_sett = load_data_from_sheet("الإعدادات", ["المفتاح", "القيمة"])
+    if df_sett.empty:
+        df_sett = pd.DataFrame([{"المفتاح": "dept_password", "القيمة": str(new_pass).strip()}])
+    else:
+        if "dept_password" in df_sett["المفتاح"].values:
+            df_sett.loc[df_sett["المفتاح"] == "dept_password", "القيمة"] = str(new_pass).strip()
+        else:
+            df_sett = pd.concat([df_sett, pd.DataFrame([{"المفتاح": "dept_password", "القيمة": str(new_pass).strip()}])], ignore_index=True)
+    save_data_to_sheet("الإعدادات", df_sett)
+
+if 'dept_password' not in st.session_state:
+    st.session_state.dept_password = get_dept_password()
+
+# --- عداد الزوار الدائم مع جوجل شيت ---
 def get_and_update_visitor_count():
+    df_vis = load_data_from_sheet("الزوار", ["عدد_الزوار"])
     count = 0
-    if os.path.exists(VISITOR_FILE):
+    if not df_vis.empty and pd.notna(df_vis.iloc[0]["عدد_الزوار"]):
         try:
-            with open(VISITOR_FILE, "r") as f:
-                count = int(f.read().strip())
+            count = int(df_vis.iloc[0]["عدد_الزوار"])
         except Exception:
             count = 0
     if 'visited_session' not in st.session_state:
         count += 1
         st.session_state.visited_session = True
-        with open(VISITOR_FILE, "w") as f:
-            f.write(str(count))
+        df_vis_updated = pd.DataFrame([{"عدد_الزوار": count}])
+        save_data_to_sheet("الزوار", df_vis_updated)
     return count
 
 visitor_number = get_and_update_visitor_count()
 
-if 'dept_password' not in st.session_state:
-    st.session_state.dept_password = "1234"
-
 FIXED_PROG_PASSWORD = "khelil2026_1982"
 
-DB_REPORTS_FILE = 'group_absence_reports.xlsx'
 REQUIRED_REPORT_COLS = [
     "رقم_التقرير", "اسم_الأستاذ", "نوع_الأستاذ", "اليوم", "التاريخ", 
     "التوقيت", "القاعة", "المادة", "الطور", "التخصص", "السنة", "الفوج", 
     "تاريخ_التسجيل", "حالة_الاطلاع"
 ]
 
-def load_group_reports():
-    if os.path.exists(DB_REPORTS_FILE):
-        try:
-            df = pd.read_excel(DB_REPORTS_FILE)
-            for col in REQUIRED_REPORT_COLS:
-                if col not in df.columns:
-                    df[col] = "مرسم" if col == "نوع_الأستاذ" else ("غير محدد" if col in ["القاعة", "المادة"] else "")
-            return df[REQUIRED_REPORT_COLS]
-        except Exception:
-            pass
-    return pd.DataFrame(columns=REQUIRED_REPORT_COLS)
-
-def save_group_reports(df):
-    df.to_excel(DB_REPORTS_FILE, index=False)
-
-if 'db_reports' not in st.session_state:
-    st.session_state.db_reports = load_group_reports()
-
-DB_REQUESTS_FILE = 'absence_requests.xlsx'
 REQUIRED_REQ_COLS = [
     "رقم_الطلب", "اسم_الأستاذ", "الرتبة", "مدة_الغياب", 
     "التاريخ", "التعويض", "السبب", "السبب_التفصيلي", 
     "تاريخ_التقديم", "الحالة"
 ]
 
-def load_absence_requests():
-    if os.path.exists(DB_REQUESTS_FILE):
-        try:
-            df = pd.read_excel(DB_REQUESTS_FILE)
-            for col in REQUIRED_REQ_COLS:
-                if col not in df.columns:
-                    df[col] = ""
-            return df[REQUIRED_REQ_COLS]
-        except Exception:
-            pass
-    return pd.DataFrame(columns=REQUIRED_REQ_COLS)
-
-def save_absence_requests(df):
-    df.to_excel(DB_REQUESTS_FILE, index=False)
+if 'db_reports' not in st.session_state:
+    st.session_state.db_reports = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
 
 if 'db_requests' not in st.session_state:
-    st.session_state.db_requests = load_absence_requests()
+    st.session_state.db_requests = load_data_from_sheet("الطلبات", REQUIRED_REQ_COLS)
 
 # ----------------------------------------------------
 # 3. إعدادات الصفحة والتصميم
@@ -123,37 +133,16 @@ st.markdown("""
     
     .main-header {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-        padding: 20px 20px 15px 20px;
+        padding: 20px;
         border-radius: 12px;
         color: white;
         text-align: center;
         margin-bottom: 20px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.15);
     }
-    
-    .main-header .univ-line {
-        font-size: 16px;
-        font-weight: 600;
-        margin-bottom: 2px;
-        opacity: 0.95;
-    }
-
-    .main-header .faculty-line {
-        font-size: 15px;
-        font-weight: 600;
-        margin-bottom: 2px;
-        opacity: 0.9;
-    }
-
-    .main-header .dept-line {
-        font-size: 15px;
-        font-weight: 600;
-        margin-bottom: 12px;
-        opacity: 0.9;
-    }
 
     .main-header h1 {
-        margin: 10px 0;
+        margin: 5px 0 10px 0;
         font-size: 26px;
         font-weight: 800;
         color: #ffffff;
@@ -161,9 +150,9 @@ st.markdown("""
     }
 
     .main-header .version-line {
-        font-size: 12px;
+        font-size: 13px;
         color: #e0e6ed;
-        margin-top: 8px;
+        margin-top: 5px;
         font-weight: 400;
     }
 
@@ -225,9 +214,6 @@ st.markdown("""
     @media (max-width: 768px) {
         .main-header h1 {
             font-size: 20px !important;
-        }
-        .main-header .univ-line, .main-header .faculty-line, .main-header .dept-line {
-            font-size: 13px !important;
         }
     }
     </style>
@@ -461,7 +447,8 @@ def render_dept_head_view(target_view_name):
                 if old_p.strip() == st.session_state.dept_password or old_p.strip() == FIXED_PROG_PASSWORD:
                     if new_p and new_p == confirm_p:
                         st.session_state.dept_password = new_p.strip()
-                        st.success("تم تغيير كلمة المرور بنجاح!")
+                        save_dept_password(new_p)
+                        st.success("تم تغيير كلمة المرور بنجاح وحفظها سحابياً!")
                     else:
                         st.error("كلمتا المرور غير متطابقتين!")
                 else:
@@ -470,7 +457,7 @@ def render_dept_head_view(target_view_name):
         st.markdown("---")
         if target_view_name in ["الغياب الجماعي للمرسم", "الغياب الجماعي للمتعاقد"]:
             st.markdown("##### 📋 كافة تقارير الغياب الجماعي المسجلة بالقسم:")
-            df_rep = st.session_state.db_reports
+            df_rep = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
             if not df_rep.empty:
                 filter_day = st.selectbox("تصفية التقارير حسب اليوم:", [DEFAULT_OPTION, "جميع الأيام"] + [d for d in DAYS_LIST if d != DEFAULT_OPTION], key=f"filter_day_{target_view_name}")
                 
@@ -489,8 +476,8 @@ def render_dept_head_view(target_view_name):
                     with c_rep_btn:
                         if row["حالة_الاطلاع"] != "تم الاطلاع":
                             if st.button("👁 تأكيد الاطلاع", key=f"btn_mark_read_{target_view_name}_{idx}"):
-                                st.session_state.db_reports.at[idx, "حالة_الاطلاع"] = "تم الاطلاع"
-                                save_group_reports(st.session_state.db_reports)
+                                df_rep.at[idx, "حالة_الاطلاع"] = "تم الاطلاع"
+                                save_data_to_sheet("التقارير", df_rep)
                                 st.success("تم التحديث إلى (تم الاطلاع).")
                                 st.rerun()
 
@@ -507,7 +494,7 @@ def render_dept_head_view(target_view_name):
 
         elif target_view_name == "طلب الغياب":
             st.markdown("##### 📋 كافة طلبات الغياب الفردية المسجلة:")
-            df_req = st.session_state.db_requests
+            df_req = load_data_from_sheet("الطلبات", REQUIRED_REQ_COLS)
             if not df_req.empty:
                 for idx, row in df_req.iterrows():
                     with st.expander(f"طلب رقم {row['رقم_الطلب']} - الأستاذ: {row['اسم_الأستاذ']} | الحالة: ({row['الحالة']})"):
@@ -516,13 +503,13 @@ def render_dept_head_view(target_view_name):
                         c_acc, c_rej = st.columns(2)
                         with c_acc:
                             if st.button("✅ قبول الطلب", key=f"req_acc_{idx}"):
-                                st.session_state.db_requests.at[idx, "الحالة"] = "مقبول"
-                                save_absence_requests(st.session_state.db_requests)
+                                df_req.at[idx, "الحالة"] = "مقبول"
+                                save_data_to_sheet("الطلبات", df_req)
                                 st.rerun()
                         with c_rej:
                             if st.button("❌ رفض الطلب", key=f"req_rej_{idx}"):
-                                st.session_state.db_requests.at[idx, "الحالة"] = "مرفوض"
-                                save_absence_requests(st.session_state.db_requests)
+                                df_req.at[idx, "الحالة"] = "مرفوض"
+                                save_data_to_sheet("الطلبات", df_req)
                                 st.rerun()
             else:
                 st.info("لا توجد طلبات غياب فردية مسجلة.")
@@ -532,9 +519,6 @@ def render_dept_head_view(target_view_name):
 # ----------------------------------------------------
 st.markdown(f"""
     <div class="main-header">
-        <div class="univ-line">جامعة الوادي</div>
-        <div class="faculty-line">كلية الآداب واللغات</div>
-        <div class="dept-line">قسم اللغة والأدب العربي</div>
         <h1>منصة إدارة خدمات القسم (نسخة تجريبية)</h1>
         <div class="version-line">النسخة 001_2026 &nbsp;|&nbsp; <span class="visitor-badge">👤 عدد الزوار: {visitor_number}</span></div>
     </div>
@@ -620,7 +604,7 @@ if st.session_state.open_prog_mode:
 
         if prog_page == "غياب جماعي":
             st.markdown("##### 📋 كافة تقارير الغياب الجماعي المسجلة بالقسم:")
-            df_rep = st.session_state.db_reports
+            df_rep = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
             if not df_rep.empty:
                 filter_day = st.selectbox("تصفية التقارير حسب اليوم:", [DEFAULT_OPTION, "جميع الأيام"] + [d for d in DAYS_LIST if d != DEFAULT_OPTION], key="filter_day_prog")
                 
@@ -639,8 +623,8 @@ if st.session_state.open_prog_mode:
                     with c_rep_btn:
                         if row["حالة_الاطلاع"] != "تم الاطلاع":
                             if st.button("👁 تأكيد الاطلاع", key=f"btn_prog_mark_read_{idx}"):
-                                st.session_state.db_reports.at[idx, "حالة_الاطلاع"] = "تم الاطلاع"
-                                save_group_reports(st.session_state.db_reports)
+                                df_rep.at[idx, "حالة_الاطلاع"] = "تم الاطلاع"
+                                save_data_to_sheet("التقارير", df_rep)
                                 st.success("تم التحديث إلى (تم الاطلاع).")
                                 st.rerun()
             else:
@@ -648,7 +632,7 @@ if st.session_state.open_prog_mode:
 
         elif prog_page == "طلب الغياب":
             st.markdown("##### 📋 كافة طلبات الغياب الفردية المسجلة:")
-            df_req = st.session_state.db_requests
+            df_req = load_data_from_sheet("الطلبات", REQUIRED_REQ_COLS)
             if not df_req.empty:
                 for idx, row in df_req.iterrows():
                     with st.expander(f"طلب رقم {row['رقم_الطلب']} - الأستاذ: {row['اسم_الأستاذ']} | الحالة: ({row['الحالة']})"):
@@ -657,13 +641,13 @@ if st.session_state.open_prog_mode:
                         c_acc, c_rej = st.columns(2)
                         with c_acc:
                             if st.button("✅ قبول الطلب", key=f"prog_acc_{idx}"):
-                                st.session_state.db_requests.at[idx, "الحالة"] = "مقبول"
-                                save_absence_requests(st.session_state.db_requests)
+                                df_req.at[idx, "الحالة"] = "مقبول"
+                                save_data_to_sheet("الطلبات", df_req)
                                 st.rerun()
                         with c_rej:
                             if st.button("❌ رفض الطلب", key=f"prog_rej_{idx}"):
-                                st.session_state.db_requests.at[idx, "الحالة"] = "مرفوض"
-                                save_absence_requests(st.session_state.db_requests)
+                                df_req.at[idx, "الحالة"] = "مرفوض"
+                                save_data_to_sheet("الطلبات", df_req)
                                 st.rerun()
             else:
                 st.info("لا توجد طلبات غياب فردية مسجلة.")
@@ -813,7 +797,8 @@ elif menu_choice == "👨‍🏫 تقرير غياب خاص بالأستاذ ا�
                                         mime="application/pdf",
                                         key="btn_confirm_yes_reg"
                                     ):
-                                        new_rep_id = len(st.session_state.db_reports) + 1
+                                        df_rep = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
+                                        new_rep_id = len(df_rep) + 1
                                         new_rep_row = {
                                             "رقم_التقرير": new_rep_id,
                                             "اسم_الأستاذ": selected_teacher,
@@ -830,8 +815,8 @@ elif menu_choice == "👨‍🏫 تقرير غياب خاص بالأستاذ ا�
                                             "تاريخ_التسجيل": datetime.now().strftime("%Y-%m-%d %H:%M"),
                                             "حالة_الاطلاع": "قيد المراجعة"
                                         }
-                                        st.session_state.db_reports = pd.concat([st.session_state.db_reports, pd.DataFrame([new_rep_row])], ignore_index=True)
-                                        save_group_reports(st.session_state.db_reports)
+                                        df_rep_updated = pd.concat([df_rep, pd.DataFrame([new_rep_row])], ignore_index=True)
+                                        save_data_to_sheet("التقارير", df_rep_updated)
                                         st.session_state.confirm_reg_show = False
                                         st.success("تم تسجيل التقرير وطباعته بنجاح!")
                                         st.rerun()
@@ -936,7 +921,8 @@ elif menu_choice == "👨‍🏫 تقرير غياب خاص بالأستاذ ا�
                                 mime="application/pdf",
                                 key="btn_confirm_yes_custom"
                             ):
-                                new_rep_id = len(st.session_state.db_reports) + 1
+                                df_rep = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
+                                new_rep_id = len(df_rep) + 1
                                 new_rep_row = {
                                     "رقم_التقرير": new_rep_id,
                                     "اسم_الأستاذ": selected_teacher,
@@ -953,8 +939,8 @@ elif menu_choice == "👨‍🏫 تقرير غياب خاص بالأستاذ ا�
                                     "تاريخ_التسجيل": datetime.now().strftime("%Y-%m-%d %H:%M"),
                                     "حالة_الاطلاع": "قيد المراجعة"
                                 }
-                                st.session_state.db_reports = pd.concat([st.session_state.db_reports, pd.DataFrame([new_rep_row])], ignore_index=True)
-                                save_group_reports(st.session_state.db_reports)
+                                df_rep_updated = pd.concat([df_rep, pd.DataFrame([new_rep_row])], ignore_index=True)
+                                save_data_to_sheet("التقارير", df_rep_updated)
                                 st.session_state.confirm_custom_show = False
                                 st.session_state.show_add_custom_session = False
                                 st.success("تم تسجيل الحصة غير المدرجة وطباعتها بنجاح!")
@@ -967,8 +953,9 @@ elif menu_choice == "👨‍🏫 تقرير غياب خاص بالأستاذ ا�
 
                 st.markdown("---")
                 st.markdown("##### 📋 التقارير الجماعية المسجلة بملفك الشخصي:")
-                t_reports = st.session_state.db_reports[
-                    st.session_state.db_reports["اسم_الأستاذ"].astype(str).str.strip() == selected_teacher.strip()
+                df_rep_all = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
+                t_reports = df_rep_all[
+                    df_rep_all["اسم_الأستاذ"].astype(str).str.strip() == selected_teacher.strip()
                 ]
 
                 if not t_reports.empty:
@@ -1069,7 +1056,8 @@ elif menu_choice == "📝 تقرير غياب خاص بالأستاذ المتع
                             mime="application/pdf",
                             key="btn_confirm_yes_cont"
                         ):
-                            new_rep_id = len(st.session_state.db_reports) + 1
+                            df_rep = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
+                            new_rep_id = len(df_rep) + 1
                             new_rep_row = {
                                 "رقم_التقرير": new_rep_id,
                                 "اسم_الأستاذ": contract_teacher_name.strip(),
@@ -1086,8 +1074,8 @@ elif menu_choice == "📝 تقرير غياب خاص بالأستاذ المتع
                                 "تاريخ_التسجيل": datetime.now().strftime("%Y-%m-%d %H:%M"),
                                 "حالة_الاطلاع": "قيد المراجعة"
                             }
-                            st.session_state.db_reports = pd.concat([st.session_state.db_reports, pd.DataFrame([new_rep_row])], ignore_index=True)
-                            save_group_reports(st.session_state.db_reports)
+                            df_rep_updated = pd.concat([df_rep, pd.DataFrame([new_rep_row])], ignore_index=True)
+                            save_data_to_sheet("التقارير", df_rep_updated)
                             st.session_state.confirm_cont_show = False
                             st.success("تم تسجيل تقرير الأستاذ المتعاقد وطباعته بنجاح!")
                             st.rerun()
@@ -1100,8 +1088,9 @@ elif menu_choice == "📝 تقرير غياب خاص بالأستاذ المتع
         if contract_teacher_name.strip():
             st.markdown("---")
             st.markdown("##### 📋 التقارير الجماعية المسجلة بملفك الشخصي:")
-            t_reports = st.session_state.db_reports[
-                st.session_state.db_reports["اسم_الأستاذ"].astype(str).str.strip() == contract_teacher_name.strip()
+            df_rep_all = load_data_from_sheet("التقارير", REQUIRED_REPORT_COLS)
+            t_reports = df_rep_all[
+                df_rep_all["اسم_الأستاذ"].astype(str).str.strip() == contract_teacher_name.strip()
             ]
 
             if not t_reports.empty:
@@ -1118,8 +1107,8 @@ elif menu_choice == "📚 مفردات مواد عروض التكوين المح
 
     st.markdown("""
         <div class="notice-box">
-            📚 <b>نافذة مفردات مواد عروض التكوين المحيّنة</b><br>
-            اضغط على الأيقونة أدناه للانتقال للمنصة - المنصة تجريبية - ليسانس فقط
+            📚 <b>موقع مفردات مواد عروض التكوين المحيّنة</b><br>
+            اضغط على الزر أدناه للانتقال المباشر لفتح منصة مفردات المواد في نافذة جديدة بسهولة وسرعة:
         </div>
     """, unsafe_allow_html=True)
 
@@ -1216,7 +1205,8 @@ elif menu_choice == "📩 طلب غياب":
             with col_b1:
                 submit_disabled = st.session_state.req_submitted or (not can_submit_req)
                 if st.button("✅ تسجيل الطلب", key="btn_submit_req", disabled=submit_disabled):
-                    new_id = len(st.session_state.db_requests) + 1
+                    df_req = load_data_from_sheet("الطلبات", REQUIRED_REQ_COLS)
+                    new_id = len(df_req) + 1
                     new_row = {
                         "رقم_الطلب": new_id,
                         "اسم_الأستاذ": req_teacher_select,
@@ -1229,9 +1219,8 @@ elif menu_choice == "📩 طلب غياب":
                         "تاريخ_التقديم": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "الحالة": "قيد الدراسة"
                     }
-                    
-                    st.session_state.db_requests = pd.concat([st.session_state.db_requests, pd.DataFrame([new_row])], ignore_index=True)
-                    save_absence_requests(st.session_state.db_requests)
+                    df_req_updated = pd.concat([df_req, pd.DataFrame([new_row])], ignore_index=True)
+                    save_data_to_sheet("الطلبات", df_req_updated)
                     st.session_state.req_submitted = True
                     st.success("تم تسجيل طلبك بنجاح وهو الآن قيد الدراسة لدى رئيس القسم.")
                     st.rerun()
@@ -1243,9 +1232,9 @@ elif menu_choice == "📩 طلب غياب":
 
             st.markdown("---")
             st.markdown("##### 📋 قائمة الطلبات المسجلة بملفك الشخصي:")
-
-            user_requests = st.session_state.db_requests[
-                st.session_state.db_requests["اسم_الأستاذ"].astype(str).str.strip() == req_teacher_select.strip()
+            df_req_all = load_data_from_sheet("الطلبات", REQUIRED_REQ_COLS)
+            user_requests = df_req_all[
+                df_req_all["اسم_الأستاذ"].astype(str).str.strip() == req_teacher_select.strip()
             ].copy()
 
             if not user_requests.empty:
